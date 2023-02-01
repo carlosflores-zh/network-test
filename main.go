@@ -22,7 +22,8 @@ const (
 	// https://docs.aws.amazon.com/enclaves/latest/user/nitro-enclave-concepts.html
 	parentCID = 3
 	// The following paths are handled by nitriding.
-	pathHelloWorld = "/hello-world"
+	pathHelloWorld  = "/hello-world"
+	pathAttestation = "/enclave/attestation"
 
 	pathProxy = "/*"
 )
@@ -35,7 +36,6 @@ var (
 )
 
 func main() {
-
 	c := &nitriding.Config{
 		FQDN:          "localhost",
 		ExtPort:       uint16(8443),
@@ -78,7 +78,7 @@ func NewEnclave(cfg *nitriding.Config) (*Enclave, error) {
 			Addr:    fmt.Sprintf(":%d", cfg.ExtPort),
 			Handler: chi.NewRouter(),
 		},
-		hashes: new(nitriding.AttestationHashes),
+		hashes: new(AttestationHashes),
 		stop:   make(chan bool),
 		ready:  make(chan bool),
 	}
@@ -90,6 +90,7 @@ func NewEnclave(cfg *nitriding.Config) (*Enclave, error) {
 	// Register public HTTP API.
 	m := e.pubSrv.Handler.(*chi.Mux)
 	m.Get(pathHelloWorld, helloWorld(e))
+	m.Get(pathAttestation, attestationHandler(e.hashes))
 
 	// Configure our reverse proxy if the enclave application exposes an HTTP
 	// server.
@@ -106,7 +107,7 @@ type Enclave struct {
 	cfg         *nitriding.Config
 	pubSrv      http.Server
 	revProxy    *httputil.ReverseProxy
-	hashes      *nitriding.AttestationHashes
+	hashes      *AttestationHashes
 	keyMaterial any
 	ready, stop chan bool
 }
