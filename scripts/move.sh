@@ -1,0 +1,1 @@
+rsync -av /Users/caff/zero-projects/network-test/ ec2-user@ec2.compute.amazonaws.com:/home/ec2-user/network-test
