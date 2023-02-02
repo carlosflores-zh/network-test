@@ -1,7 +1,7 @@
 package main
 
 import (
-	"errors"
+	"database/sql"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,8 +10,9 @@ import (
 	"time"
 
 	"github.com/brave/nitriding"
-	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi"
 	"github.com/go-chi/chi/v5/middleware"
+	_ "github.com/lib/pq"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -28,12 +29,32 @@ const (
 	pathProxy = "/*"
 )
 
-var (
-	inEnclave         = true
-	errNoKeyMaterial  = errors.New("no key material registered")
-	errCfgMissingFQDN = errors.New("given config is missing FQDN")
-	errCfgMissingPort = errors.New("given config is missing port")
+// database consts
+const (
+	host     = "xrds.amazonaws.com"
+	port     = 5432
+	user     = "postgres"
+	password = "postgres"
+	dbname   = "postgres"
 )
+
+func connectDB() (*sql.DB, error) {
+	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s "+
+		"password=%s dbname=%s sslmode=disable",
+		host, port, user, password, dbname)
+	db, err := sql.Open("postgres", psqlInfo)
+	if err != nil {
+		return nil, err
+	}
+
+	err = db.Ping()
+	if err != nil {
+		return nil, err
+	}
+
+	log.Println("Successfully connected to DB!")
+	return db, nil
+}
 
 func main() {
 	c := &nitriding.Config{
@@ -54,6 +75,19 @@ func main() {
 		log.Fatalf("Enclave terminated: %v", err)
 	}
 
+	db, err := connectDB()
+	if err != nil {
+		log.Fatalln("DB connection failed: %+v", err)
+	}
+	defer db.Close()
+
+	var count int
+	err = db.QueryRow("SELECT count(*) from links").Scan(&count)
+	if err != nil {
+		log.Fatal("Failed to execute query: ", err)
+	}
+
+	log.Printf("Found in DB: %d", count)
 	// Block on this read forever.
 	<-make(chan struct{})
 }
@@ -126,6 +160,9 @@ func (e *Enclave) Start() error {
 	// Start enclave-internal HTTP server.
 	go runNetworking(e.cfg, e.stop)
 
+	// sleep until networking is setup, we can change this later for goroutines
+	time.Sleep(3 * time.Second)
+
 	if err != nil {
 		return fmt.Errorf("%s: failed to create certificate: %w", errPrefix, err)
 	}
@@ -140,7 +177,7 @@ func (e *Enclave) Start() error {
 // startWebServers starts both our public-facing and our enclave-internal Web
 // server in a goroutine.
 func startWebServers(e *Enclave) error {
-	log.Println("Public Web server.")
+	log.Println("Public Web server started")
 	go func() {
 		if err := e.pubSrv.ListenAndServe(); err != nil {
 			log.Errorf("Public Web server terminated: %v", err)

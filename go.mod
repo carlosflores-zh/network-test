@@ -7,7 +7,11 @@ require (
 	github.com/containers/gvisor-tap-vsock v0.5.0
 	github.com/dustin/go-humanize v1.0.0
 	github.com/gin-gonic/gin v1.8.2
+	github.com/go-chi/chi v1.5.4
 	github.com/go-chi/chi/v5 v5.0.8
+	github.com/hf/nitrite v0.0.0-20211104000856-f9e0dcc73703
+	github.com/hf/nsm v0.0.0-20220930140112-cd181bd646b9
+	github.com/lib/pq v1.10.7
 	github.com/milosgajdos/tenus v0.0.3
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.9.0
@@ -30,8 +34,6 @@ require (
 	github.com/goccy/go-json v0.9.11 // indirect
 	github.com/google/btree v1.1.2 // indirect
 	github.com/google/gopacket v1.1.19 // indirect
-	github.com/hf/nitrite v0.0.0-20211104000856-f9e0dcc73703 // indirect
-	github.com/hf/nsm v0.0.0-20220930140112-cd181bd646b9 // indirect
 	github.com/insomniacslk/dhcp v0.0.0-20220504074936-1ca156eafb9f // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/leodido/go-urn v1.2.1 // indirect
