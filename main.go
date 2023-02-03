@@ -3,13 +3,19 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"io"
 	"net/http"
 	"net/http/httputil"
 	"sync"
 	"time"
 
+	"context"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/kms"
+	"github.com/aws/aws-sdk-go-v2/service/kms/types"
 	"github.com/brave/nitriding"
+	enclave "github.com/edgebitio/nitro-enclaves-sdk-go"
 	"github.com/go-chi/chi"
 	"github.com/go-chi/chi/v5/middleware"
 	_ "github.com/lib/pq"
@@ -25,6 +31,7 @@ const (
 	// The following paths are handled by nitriding.
 	pathHelloWorld  = "/hello-world"
 	pathAttestation = "/enclave/attestation"
+	pathKmsTest     = "/enclave/kms-test"
 
 	pathProxy = "/*"
 )
@@ -125,6 +132,7 @@ func NewEnclave(cfg *nitriding.Config) (*Enclave, error) {
 	m := e.pubSrv.Handler.(*chi.Mux)
 	m.Get(pathHelloWorld, helloWorld(e))
 	m.Get(pathAttestation, attestationHandler(e.hashes))
+	m.Get(pathKmsTest, kmsHandler())
 
 	// Configure our reverse proxy if the enclave application exposes an HTTP
 	// server.
@@ -206,5 +214,63 @@ func helloWorld(e *Enclave) http.HandlerFunc {
 
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("Hello World!"))
+	}
+}
+
+func kmsHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.TODO()
+		log.Println("starting kms request")
+		cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion("us-east-2"))
+		if err != nil {
+			log.Println(err)
+		}
+
+		log.Println("config loaded")
+
+		enclaveHandle, err := enclave.GetOrInitializeHandle()
+		if err != nil {
+			log.Println(err)
+		}
+
+		log.Println("enclave handle loaded")
+
+		attestationDocument, err := enclaveHandle.Attest(enclave.AttestationOptions{})
+		if err != nil {
+			log.Println(err)
+		}
+
+		log.Println("attestation document loaded")
+
+		log.Println(len(attestationDocument))
+
+		kmsClient := kms.NewFromConfig(cfg)
+		dataKeyRes, err := kmsClient.GenerateDataKey(context.Background(), &kms.GenerateDataKeyInput{
+			KeyId:   aws.String("fe8fb5fb-8399-4e6a-8633-a00ad54b2e16"),
+			KeySpec: types.DataKeySpecAes256,
+			Recipient: &types.RecipientInfoType{
+				AttestationDocument:    attestationDocument,
+				KeyEncryptionAlgorithm: types.EncryptionAlgorithmSpecRsaesOaepSha256,
+			},
+		})
+		if err != nil {
+			log.Println(err)
+		}
+
+		log.Println("generated data key")
+		log.Println(dataKeyRes.CiphertextForRecipient)
+
+		if dataKeyRes.CiphertextForRecipient == nil {
+			log.Println("nil")
+		}
+
+		key, err := enclaveHandle.DecryptKMSEnvelopedKey(dataKeyRes.CiphertextForRecipient)
+		if err != nil {
+			log.Println(err)
+		}
+
+		log.Printf("key: %v", key)
+
+		w.WriteHeader(http.StatusOK)
 	}
 }
