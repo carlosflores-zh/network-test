@@ -75,6 +75,7 @@ func setupNetworking(c *nitriding.Config, stop chan bool) error {
 			MultiQueue: true,
 		},
 	})
+
 	if err != nil {
 		return fmt.Errorf("failed to create tap device: %w", err)
 	}

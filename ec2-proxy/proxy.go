@@ -31,9 +31,6 @@ var (
 	debug           bool
 	mtu             int
 	endpoints       arrayFlags
-	vpnkitSocket    string
-	qemuSocket      string
-	bessSocket      string
 	forwardSocket   arrayFlags
 	forwardDest     arrayFlags
 	forwardUser     arrayFlags
@@ -53,9 +50,6 @@ func main() {
 	flag.BoolVar(&debug, "debug", false, "Print debug info")
 	flag.IntVar(&mtu, "mtu", 1500, "Set the MTU")
 	flag.IntVar(&sshPort, "ssh-port", 1024, "Port to access the guest virtual machine. Must be between 1024 and 65535")
-	flag.StringVar(&vpnkitSocket, "listen-vpnkit", "", "VPNKit socket to be used by Hyperkit")
-	flag.StringVar(&qemuSocket, "listen-qemu", "", "Socket to be used by Qemu")
-	flag.StringVar(&bessSocket, "listen-bess", "", "unixpacket socket to be used by Bess-compatible applications")
 	flag.Var(&forwardSocket, "forward-sock", "Forwards a unix socket to the guest virtual machine over SSH")
 	flag.Var(&forwardDest, "forward-dest", "Forwards a unix socket to the guest virtual machine over SSH")
 	flag.Var(&forwardUser, "forward-user", "SSH user to use for unix socket forward")
@@ -75,50 +69,10 @@ func main() {
 		log.SetLevel(log.DebugLevel)
 	}
 
-	// Make sure the qemu socket provided is valid syntax
-	if len(qemuSocket) > 0 {
-		uri, err := url.Parse(qemuSocket)
-		if err != nil || uri == nil {
-			exitWithError(errors.Wrapf(err, "invalid value for listen-qemu"))
-		}
-		if _, err := os.Stat(uri.Path); err == nil && uri.Scheme == "unix" {
-			exitWithError(errors.Errorf("%q already exists", uri.Path))
-		}
-	}
-	if len(bessSocket) > 0 {
-		uri, err := url.Parse(bessSocket)
-		if err != nil || uri == nil {
-			exitWithError(errors.Wrapf(err, "invalid value for listen-bess"))
-		}
-		if uri.Scheme != "unixpacket" {
-			exitWithError(errors.New("listen-bess must be unixpacket:// address"))
-		}
-		if _, err := os.Stat(uri.Path); err == nil {
-			exitWithError(errors.Errorf("%q already exists", uri.Path))
-		}
-	}
-
-	if vpnkitSocket != "" && qemuSocket != "" {
-		exitWithError(errors.New("cannot use qemu and vpnkit protocol at the same time"))
-	}
-	if vpnkitSocket != "" && bessSocket != "" {
-		exitWithError(errors.New("cannot use bess and vpnkit protocol at the same time"))
-	}
-	if qemuSocket != "" && bessSocket != "" {
-		exitWithError(errors.New("cannot use qemu and bess protocol at the same time"))
-	}
-
 	// If the given port is not between the privileged ports
 	// and the oft considered maximum port, return an error.
 	if sshPort < 1024 || sshPort > 65535 {
 		exitWithError(errors.New("ssh-port value must be between 1024 and 65535"))
-	}
-	protocol := types.HyperKitProtocol
-	if qemuSocket != "" {
-		protocol = types.QemuProtocol
-	}
-	if bessSocket != "" {
-		protocol = types.BessProtocol
 	}
 
 	if c := len(forwardSocket); c != len(forwardDest) || c != len(forwardUser) || c != len(forwardIdentify) {
@@ -195,12 +149,12 @@ func main() {
 		},
 		NAT: map[string]string{
 			"192.168.127.254": "127.0.0.1",
+			"169.254.169.254": "169.254.169.254",
 		},
 		GatewayVirtualIPs: []string{"192.168.127.254"},
 		VpnKitUUIDMacAddresses: map[string]string{
 			"c3d68012-0208-11ea-9fd7-f2189899ab08": "5a:94:ef:e4:0c:ee",
 		},
-		Protocol: protocol,
 	}
 
 	groupErrs.Go(func() error {
@@ -284,80 +238,7 @@ func run(ctx context.Context, g *errgroup.Group, configuration *types.Configurat
 		})
 	}
 
-	if vpnkitSocket != "" {
-		vpnkitListener, err := transport.Listen(vpnkitSocket)
-		if err != nil {
-			return err
-		}
-		g.Go(func() error {
-		vpnloop:
-			for {
-				select {
-				case <-ctx.Done():
-					break vpnloop
-				default:
-					// pass through
-				}
-				conn, err := vpnkitListener.Accept()
-				if err != nil {
-					log.Errorf("vpnkit accept error: %s", err)
-					continue
-				}
-				g.Go(func() error {
-					return vn.AcceptVpnKit(conn)
-				})
-			}
-			return nil
-		})
-	}
-
-	if qemuSocket != "" {
-		qemuListener, err := transport.Listen(qemuSocket)
-		if err != nil {
-			return err
-		}
-
-		g.Go(func() error {
-			<-ctx.Done()
-			if err := qemuListener.Close(); err != nil {
-				log.Errorf("error closing %s: %q", qemuSocket, err)
-			}
-			return os.Remove(qemuSocket)
-		})
-
-		g.Go(func() error {
-			conn, err := qemuListener.Accept()
-			if err != nil {
-				return errors.Wrap(err, "qemu accept error")
-
-			}
-			return vn.AcceptQemu(ctx, conn)
-		})
-	}
-
-	if bessSocket != "" {
-		bessListener, err := transport.Listen(bessSocket)
-		if err != nil {
-			return err
-		}
-
-		g.Go(func() error {
-			<-ctx.Done()
-			if err := bessListener.Close(); err != nil {
-				log.Errorf("error closing %s: %q", bessSocket, err)
-			}
-			return os.Remove(bessSocket)
-		})
-
-		g.Go(func() error {
-			conn, err := bessListener.Accept()
-			if err != nil {
-				return errors.Wrap(err, "bess accept error")
-
-			}
-			return vn.AcceptBess(ctx, conn)
-		})
-	}
+	log.Println("forwardsocket", forwardSocket)
 
 	for i := 0; i < len(forwardSocket); i++ {
 		var (
@@ -465,7 +346,7 @@ func searchDomains() []string {
 		for sc.Scan() {
 			if strings.HasPrefix(sc.Text(), searchPrefix) {
 				searchDomains := strings.Split(strings.TrimPrefix(sc.Text(), searchPrefix), " ")
-				log.Debugf("Using search domains: %v", searchDomains)
+				log.Printf("Using search domains: %v", searchDomains)
 				return searchDomains
 			}
 		}
