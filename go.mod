@@ -6,11 +6,11 @@ require (
 	github.com/brave/nitriding v1.1.6-0.20230124210559-4053741a9361
 	github.com/containers/gvisor-tap-vsock v0.5.0
 	github.com/dustin/go-humanize v1.0.0
+	github.com/edgebitio/nitro-enclaves-sdk-go v1.0.0
 	github.com/gin-gonic/gin v1.8.2
 	github.com/go-chi/chi v1.5.4
 	github.com/go-chi/chi/v5 v5.0.8
 	github.com/hf/nitrite v0.0.0-20211104000856-f9e0dcc73703
-	github.com/hf/nsm v0.0.0-20220930140112-cd181bd646b9
 	github.com/lib/pq v1.10.7
 	github.com/milosgajdos/tenus v0.0.3
 	github.com/pkg/errors v0.9.1
@@ -34,6 +34,7 @@ require (
 	github.com/goccy/go-json v0.9.11 // indirect
 	github.com/google/btree v1.1.2 // indirect
 	github.com/google/gopacket v1.1.19 // indirect
+	github.com/hf/nsm v0.0.0-20220930140112-cd181bd646b9 // indirect
 	github.com/insomniacslk/dhcp v0.0.0-20220504074936-1ca156eafb9f // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/leodido/go-urn v1.2.1 // indirect
@@ -60,3 +61,5 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	inet.af/tcpproxy v0.0.0-20220326234310-be3ee21c9fa0 // indirect
 )
+
+replace github.com/aws/aws-sdk-go-v2/service/kms => github.com/edgebitio/nitro-enclaves-sdk-go/kms v0.0.0-20221110205443-8a5476ff3cc2

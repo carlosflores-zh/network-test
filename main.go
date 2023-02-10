@@ -1,7 +1,7 @@
 package main
 
 import (
-	"database/sql"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,8 +10,10 @@ import (
 	"time"
 
 	"github.com/brave/nitriding"
+	enclave "github.com/edgebitio/nitro-enclaves-sdk-go"
 	"github.com/go-chi/chi"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/hf/nitrite"
 	_ "github.com/lib/pq"
 	log "github.com/sirupsen/logrus"
 )
@@ -25,18 +27,21 @@ const (
 	// The following paths are handled by nitriding.
 	pathHelloWorld  = "/hello-world"
 	pathAttestation = "/enclave/attestation"
+	autoAttestation = "/enclave/test-attestation"
 
 	pathProxy = "/*"
 )
 
+/*
 // database consts
 const (
-	host     = "xrds.amazonaws.com"
+	host     = "database-1.cf5c0poqleag.us-east-2.rds.amazonaws.com"
 	port     = 5432
 	user     = "postgres"
 	password = "postgres"
 	dbname   = "postgres"
 )
+
 
 func connectDB() (*sql.DB, error) {
 	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s "+
@@ -55,6 +60,7 @@ func connectDB() (*sql.DB, error) {
 	log.Println("Successfully connected to DB!")
 	return db, nil
 }
+*/
 
 func main() {
 	c := &nitriding.Config{
@@ -75,19 +81,23 @@ func main() {
 		log.Fatalf("Enclave terminated: %v", err)
 	}
 
-	db, err := connectDB()
-	if err != nil {
-		log.Fatalln("DB connection failed: %+v", err)
-	}
-	defer db.Close()
+	/*
 
-	var count int
-	err = db.QueryRow("SELECT count(*) from links").Scan(&count)
-	if err != nil {
-		log.Fatal("Failed to execute query: ", err)
-	}
+		db, err := connectDB()
+		if err != nil {
+			log.Fatalln("DB connection failed: %+v", err)
+		}
+		defer db.Close()
 
-	log.Printf("Found in DB: %d", count)
+		var count int
+		err = db.QueryRow("SELECT count(*) from links").Scan(&count)
+		if err != nil {
+			log.Fatal("Failed to execute query: ", err)
+		}
+
+		log.Printf("Found in DB: %d", count)
+
+	*/
 	// Block on this read forever.
 	<-make(chan struct{})
 }
@@ -125,6 +135,7 @@ func NewEnclave(cfg *nitriding.Config) (*Enclave, error) {
 	m := e.pubSrv.Handler.(*chi.Mux)
 	m.Get(pathHelloWorld, helloWorld(e))
 	m.Get(pathAttestation, attestationHandler(e.hashes))
+	m.Get(autoAttestation, AutoAttestationHandler())
 
 	// Configure our reverse proxy if the enclave application exposes an HTTP
 	// server.
@@ -207,4 +218,125 @@ func helloWorld(e *Enclave) http.HandlerFunc {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("Hello World!"))
 	}
+}
+
+func AutoAttestationHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		// create a 32 random nonce
+		hardcodedNonce := []byte("123123231231213213213213241421121")
+
+		/*
+				ctx := context.TODO()
+			log.Println("starting kms request")
+			cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion("us-east-2"))
+			if err != nil {
+				log.Println(err)
+			}
+		*/
+
+		enclaveHandle, err := enclave.GetOrInitializeHandle()
+		if err != nil {
+			log.Println(err)
+		}
+
+		// edgebit method to get the attestation document
+		attestationDocument, err := enclaveHandle.Attest(enclave.AttestationOptions{})
+		if err != nil {
+			log.Println(err)
+		}
+
+		log.Printf("Attestation Document: %s", len(attestationDocument))
+
+		myPCRs, err := verifyAttestation(attestationDocument)
+		if err != nil {
+			log.Fatalf("Failed to verify attestation: %v", err)
+		}
+
+		// Verify that the PCR values match the expected values.
+		// It will always work in this example, but in a real application you should be getting the value from another instance
+
+		// nitriding method to get the attestation document
+		rawAttDoc, err := attest(hardcodedNonce, nil, nil)
+		if err != nil {
+			log.Fatalf("Failed to attest: %v", err)
+		}
+
+		res, err := nitrite.Verify(rawAttDoc, nitrite.VerifyOptions{})
+		if err != nil {
+			log.Fatalf("Failed to verify attestation: %v", err)
+		}
+
+		log.Printf("Attestation Document: %s", res.Document.Digest)
+
+		if string(res.Document.Nonce) == string(hardcodedNonce) {
+			log.Printf("nonce matches: %s ", hardcodedNonce)
+		}
+
+		result := arePCRsIdentical(myPCRs, res.Document.PCRs)
+		log.Printf("PCR values match: %v", result)
+
+		/*
+
+			kmsClient := kms.NewFromConfig(cfg)
+			dataKeyRes, err := kmsClient.GenerateDataKey(context.Background(), &kms.GenerateDataKeyInput{
+				KeyId:   aws.String("arn:aws:kms:us-east-2:832540076233:key/fe8fb5fb-8399-4e6a-8633-a00ad54b2e16"),
+				KeySpec: types.DataKeySpecAes256,
+				Recipient: &types.RecipientInfoType{
+					AttestationDocument:    attestationDocument,
+					KeyEncryptionAlgorithm: types.EncryptionAlgorithmSpecRsaesOaepSha256,
+				},
+			})
+			if err != nil {
+				log.Fatalln("error generating datakey", err)
+			}
+
+			log.Println("generated data key")
+			log.Println(dataKeyRes.CiphertextForRecipient)
+
+			if dataKeyRes.CiphertextForRecipient == nil {
+				log.Fatalln("nil")
+			}
+
+			key, err := enclaveHandle.DecryptKMSEnvelopedKey(dataKeyRes.CiphertextForRecipient)
+			if err != nil {
+				log.Fatalln(err)
+			}
+
+			log.Printf("key: %v", key)
+
+		*/
+
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+func verifyAttestation(attestation []byte) (map[uint][]byte, error) {
+	res, err := nitrite.Verify(attestation,
+		nitrite.VerifyOptions{
+			CurrentTime: time.Now(),
+		})
+
+	if nil != err {
+		return nil, err
+	}
+
+	resJSON := ""
+
+	if nil != res {
+		enc, err := json.Marshal(res.Document)
+		if nil != err {
+			log.Fatalln(err)
+		}
+
+		resJSON = string(enc)
+	}
+
+	if nil != err {
+		log.Fatalln("Attestation verification failed with error %v\n", err)
+	}
+
+	log.Printf("%v\n", resJSON)
+
+	return res.Document.PCRs, nil
 }
