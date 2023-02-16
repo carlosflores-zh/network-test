@@ -1,4 +1,4 @@
-package main
+package system
 
 import (
 	"fmt"
@@ -18,7 +18,7 @@ const (
 )
 
 // configureLoIface assigns an IP address to the loopback interface.
-func configureLoIface() error {
+func ConfigureLoIface() error {
 	l, err := tenus.NewLinkFrom(ifaceLo)
 	if err != nil {
 		return err

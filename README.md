@@ -18,3 +18,8 @@ How to run?
   - In the console where you run the enclave app, you will see the request to the json public api
 - get attestation doc:
   - wget  http://localhost:8443/enclave/attestation?nonce=2133213123123123121231231231231267845231
+
+
+how to access local metadata service??
+169.254.169.254
+- forward locally?
