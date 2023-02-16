@@ -1,4 +1,4 @@
-package main
+package system
 
 // Code mostly taken from:
 // https://github.com/containers/gvisor-tap-vsock/blob/main/cmd/vm/main_linux.go
@@ -24,12 +24,12 @@ var (
 	mtu = 4000
 )
 
-// runNetworking calls the function that sets up our networking environment.
+// RunNetworking calls the function that sets up our networking environment.
 // If anything fails, we try again after a brief wait period.
-func runNetworking(c *nitriding.Config, stop chan bool) {
+func RunNetworking(c *nitriding.Config, stop chan bool, parentCID uint32) {
 	var err error
 	for {
-		if err = setupNetworking(c, stop); err == nil {
+		if err = setupNetworking(c, stop, parentCID); err == nil {
 			return
 		}
 		log.Printf("TAP tunnel to EC2 host failed: %v.  Restarting.", err)
@@ -45,7 +45,7 @@ func runNetworking(c *nitriding.Config, stop chan bool) {
 //  3. Establish a connection with the proxy running on the host.
 //  4. Spawn goroutines to forward traffic between the TAP device and the proxy
 //     running on the host.
-func setupNetworking(c *nitriding.Config, stop chan bool) error {
+func setupNetworking(c *nitriding.Config, stop chan bool, parentCID uint32) error {
 	log.Println("Setting up networking between host and enclave.")
 	defer log.Println("Tearing down networking between host and enclave.")
 

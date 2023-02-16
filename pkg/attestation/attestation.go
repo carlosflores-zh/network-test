@@ -1,4 +1,4 @@
-package main
+package attestation
 
 import (
 	"bytes"
@@ -38,9 +38,9 @@ var (
 	getPCRValues = func() (map[uint][]byte, error) { return _getPCRValues() }
 )
 
-// AttestationHashes contains hashes over public key material which we embed in
+// Hashes contains hashes over public key material which we embed in
 // the enclave's attestation document for clients to verify.
-type AttestationHashes struct {
+type Hashes struct {
 	tlsKeyHash [sha256.Size]byte // Always set.
 	appKeyHash [sha256.Size]byte // Sometimes set, depending on application.
 }
@@ -48,7 +48,7 @@ type AttestationHashes struct {
 // Serialize returns a byte slice that contains our concatenated hashes.  Note
 // that all hashes are always present.  If a hash was not initialized, it's set
 // to 0-bytes.
-func (a *AttestationHashes) Serialize() []byte {
+func (a *Hashes) Serialize() []byte {
 	str := fmt.Sprintf("%s%s%s%s%s",
 		hashPrefix,
 		a.tlsKeyHash,
@@ -58,12 +58,7 @@ func (a *AttestationHashes) Serialize() []byte {
 	return []byte(str)
 }
 
-// attestationHandler takes as input an AttestationHashes struct and returns a
-// HandlerFunc.  This HandlerFunc expects a nonce in the URL query parameters
-// and subsequently asks its hypervisor for an attestation document that
-// contains both the nonce and the hashes in the given struct.  The resulting
-// Base64-encoded attestation document is then returned to the requester.
-func attestationHandler(hashes *AttestationHashes) http.HandlerFunc {
+func Handler(hashes *Hashes) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, errMethodNotGET, http.StatusMethodNotAllowed)
@@ -94,7 +89,7 @@ func attestationHandler(hashes *AttestationHashes) http.HandlerFunc {
 			return
 		}
 
-		rawDoc, err := attest(rawNonce, hashes.Serialize(), nil)
+		rawDoc, err := Attest(rawNonce, hashes.Serialize(), nil)
 		if err != nil {
 			log.Println("Attestation: Failed to obtain attestation document from hypervisor:", err)
 			http.Error(w, errFailedAttestation, http.StatusInternalServerError)
@@ -108,7 +103,7 @@ func attestationHandler(hashes *AttestationHashes) http.HandlerFunc {
 // _getPCRValues returns the enclave's platform configuration register (PCR)
 // values.
 func _getPCRValues() (map[uint][]byte, error) {
-	rawAttDoc, err := attest(nil, nil, nil)
+	rawAttDoc, err := Attest(nil, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -121,9 +116,9 @@ func _getPCRValues() (map[uint][]byte, error) {
 	return res.Document.PCRs, nil
 }
 
-// arePCRsIdentical returns true if (and only if) the two given PCR maps are
+// ArePCRsIdentical returns true if (and only if) the two given PCR maps are
 // identical.
-func arePCRsIdentical(ourPCRs, theirPCRs map[uint][]byte) bool {
+func ArePCRsIdentical(ourPCRs, theirPCRs map[uint][]byte) bool {
 	if len(ourPCRs) != len(theirPCRs) {
 		return false
 	}
@@ -140,10 +135,11 @@ func arePCRsIdentical(ourPCRs, theirPCRs map[uint][]byte) bool {
 	return true
 }
 
-// attest takes as input a nonce, user-provided data and a public key, and then
+// Attest TODO: change back to private? temporarily public for testing
+// Attest takes as input a nonce, user-provided data and a public key, and then
 // asks the Nitro hypervisor to return a signed attestation document that
 // contains all three values.
-func attest(nonce, userData, publicKey []byte) ([]byte, error) {
+func Attest(nonce, userData, publicKey []byte) ([]byte, error) {
 	s, err := nsm.OpenDefaultSession()
 	if err != nil {
 		return nil, err

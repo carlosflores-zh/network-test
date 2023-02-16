@@ -16,14 +16,17 @@ import (
 	"github.com/hf/nitrite"
 	_ "github.com/lib/pq"
 	log "github.com/sirupsen/logrus"
+
+	"network-test/pkg/attestation"
+	"network-test/pkg/system"
 )
 
 const (
 	certificateValidity = time.Hour * 24 * 356
-	// parentCID determines the CID (analogous to an IP address) of the parent
+	// ParentCID  determines the CID (analogous to an IP address) of the parent
 	// EC2 instance.  According to the AWS docs, it is always 3:
 	// https://docs.aws.amazon.com/enclaves/latest/user/nitro-enclave-concepts.html
-	parentCID = 3
+	ParentCID = 3
 	// The following paths are handled by nitriding.
 	pathHelloWorld  = "/hello-world"
 	pathAttestation = "/enclave/attestation"
@@ -31,36 +34,6 @@ const (
 
 	pathProxy = "/*"
 )
-
-/*
-// database consts
-const (
-	host     = "database-1.cf5c0poqleag.us-east-2.rds.amazonaws.com"
-	port     = 5432
-	user     = "postgres"
-	password = "postgres"
-	dbname   = "postgres"
-)
-
-
-func connectDB() (*sql.DB, error) {
-	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s "+
-		"password=%s dbname=%s sslmode=disable",
-		host, port, user, password, dbname)
-	db, err := sql.Open("postgres", psqlInfo)
-	if err != nil {
-		return nil, err
-	}
-
-	err = db.Ping()
-	if err != nil {
-		return nil, err
-	}
-
-	log.Println("Successfully connected to DB!")
-	return db, nil
-}
-*/
 
 func main() {
 	c := &nitriding.Config{
@@ -72,7 +45,7 @@ func main() {
 		AppWebSrv:     nil,
 	}
 
-	enclave, err := NewEnclave(c)
+	enclave, err := NewEnclave(c, ParentCID)
 	if err != nil {
 		log.Fatalf("Failed to create enclave: %v", err)
 	}
@@ -81,23 +54,6 @@ func main() {
 		log.Fatalf("Enclave terminated: %v", err)
 	}
 
-	/*
-
-		db, err := connectDB()
-		if err != nil {
-			log.Fatalln("DB connection failed: %+v", err)
-		}
-		defer db.Close()
-
-		var count int
-		err = db.QueryRow("SELECT count(*) from links").Scan(&count)
-		if err != nil {
-			log.Fatal("Failed to execute query: ", err)
-		}
-
-		log.Printf("Found in DB: %d", count)
-
-	*/
 	// Block on this read forever.
 	<-make(chan struct{})
 }
@@ -111,7 +67,7 @@ func proxyHandler(e *Enclave) http.HandlerFunc {
 }
 
 // NewEnclave creates and returns a new enclave with the given config.
-func NewEnclave(cfg *nitriding.Config) (*Enclave, error) {
+func NewEnclave(cfg *nitriding.Config, ParentCID uint32) (*Enclave, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("failed to create enclave: %w", err)
 	}
@@ -122,9 +78,10 @@ func NewEnclave(cfg *nitriding.Config) (*Enclave, error) {
 			Addr:    fmt.Sprintf(":%d", cfg.ExtPort),
 			Handler: chi.NewRouter(),
 		},
-		hashes: new(AttestationHashes),
-		stop:   make(chan bool),
-		ready:  make(chan bool),
+		hashes:    new(attestation.Hashes),
+		stop:      make(chan bool),
+		ready:     make(chan bool),
+		ParentCID: ParentCID,
 	}
 
 	if cfg.Debug {
@@ -134,7 +91,7 @@ func NewEnclave(cfg *nitriding.Config) (*Enclave, error) {
 	// Register public HTTP API.
 	m := e.pubSrv.Handler.(*chi.Mux)
 	m.Get(pathHelloWorld, helloWorld(e))
-	m.Get(pathAttestation, attestationHandler(e.hashes))
+	m.Get(pathAttestation, attestation.Handler(e.hashes))
 	m.Get(autoAttestation, AutoAttestationHandler())
 
 	// Configure our reverse proxy if the enclave application exposes an HTTP
@@ -152,24 +109,26 @@ type Enclave struct {
 	cfg         *nitriding.Config
 	pubSrv      http.Server
 	revProxy    *httputil.ReverseProxy
-	hashes      *AttestationHashes
+	hashes      *attestation.Hashes
 	keyMaterial any
 	ready, stop chan bool
+	ParentCID   uint32
 }
 
 func (e *Enclave) Start() error {
 	var err error
 	errPrefix := "failed to start Nitro Enclave"
 
-	if err = setFdLimit(e.cfg.FdCur, e.cfg.FdMax); err != nil {
+	if err = system.SetFdLimit(e.cfg.FdCur, e.cfg.FdMax); err != nil {
 		log.Printf("Failed to set new file descriptor limit: %s", err)
 	}
-	if err = configureLoIface(); err != nil {
+
+	if err = system.ConfigureLoIface(); err != nil {
 		return fmt.Errorf("%s: %w", errPrefix, err)
 	}
 
 	// Start enclave-internal HTTP server.
-	go runNetworking(e.cfg, e.stop)
+	go system.RunNetworking(e.cfg, e.stop, ParentCID)
 
 	// sleep until networking is setup, we can change this later for goroutines
 	time.Sleep(3 * time.Second)
@@ -257,7 +216,7 @@ func AutoAttestationHandler() http.HandlerFunc {
 		// It will always work in this example, but in a real application you should be getting the value from another instance
 
 		// nitriding method to get the attestation document
-		rawAttDoc, err := attest(hardcodedNonce, nil, nil)
+		rawAttDoc, err := attestation.Attest(hardcodedNonce, nil, nil)
 		if err != nil {
 			log.Fatalf("Failed to attest: %v", err)
 		}
@@ -273,8 +232,16 @@ func AutoAttestationHandler() http.HandlerFunc {
 			log.Printf("nonce matches: %s ", hardcodedNonce)
 		}
 
-		result := arePCRsIdentical(myPCRs, res.Document.PCRs)
+		result := attestation.ArePCRsIdentical(myPCRs, res.Document.PCRs)
 		log.Printf("PCR values match: %v", result)
+
+		rexs := ""
+		for i, h := range res.Document.PCRs {
+			log.Printf("PCR %d: %x", i, string(h))
+			rexs += fmt.Sprintf(" -   PCR %d: %x", i, string(h))
+		}
+
+		rexs = rexs + " digest   " + res.Document.Digest + " public key  " + string(res.Document.PublicKey) + "  moduleID   " + res.Document.ModuleID
 
 		/*
 
@@ -307,6 +274,7 @@ func AutoAttestationHandler() http.HandlerFunc {
 
 		*/
 
+		w.Write([]byte(rexs))
 		w.WriteHeader(http.StatusOK)
 	}
 }
